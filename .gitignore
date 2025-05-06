@@ -27,7 +27,7 @@ Thumbs.db
 # Local data
 *.sqlite
 *.db
-
+*.pdf
 # Environment files
 .env
 
