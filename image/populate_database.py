@@ -7,6 +7,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain.vectorstores.chroma import Chroma
 from src.GTE.GTE import greek_text_from_text
+from src.rag_app.get_embedding_function import get_embedding_function
 
 DATA_PATH = "./src/data/source/"
 BOOK_DB = "./src/data/bookchroma"
@@ -24,7 +25,7 @@ def main():
     documents = load_documents()
     chunks = split_documents(documents)
     add_to_book(chunks)
-    add_to_greek(documents[0])
+    add_to_greek(documents)
 
 def load_documents():
     document_loader = PyPDFDirectoryLoader(DATA_PATH)
@@ -41,7 +42,7 @@ def split_documents(documents: list[Document]):
 
 def add_to_book(chunks: list[Document]):
     book_db = Chroma(
-        persist_directory=BOOK_DB, embedding_function=None #TODO: embedding_function 
+        persist_directory=BOOK_DB, embedding_function=get_embedding_function() #TODO: embedding_function 
     )
     
     chunks_with_ids = calculate_chunk_ids(chunks)
@@ -64,13 +65,16 @@ def add_to_book(chunks: list[Document]):
         book_db.persist()
     else:
         print("✅ No new documents to add")
-def add_to_greek(text: Document):
+def add_to_greek(text: list[Document]):
     if os.path.exists(GREEK_DB):
         shutil.rmtree(GREEK_DB)
     greek_db = Chroma(
-        persist_directory=GREEK_DB, embedding_function=None #TODO: embedding_function
+        persist_directory=GREEK_DB, embedding_function=get_embedding_function() #TODO: embedding_function
     )
-    chunks = greek_text_from_text(text.page_content)
+    content = ""
+    for doc in text:
+        content= content + (doc.page_content+" ")
+    chunks = greek_text_from_text(content)
     new_chunks = []
     for chunk in chunks:
         new_chunks.append(Document(
@@ -79,6 +83,7 @@ def add_to_greek(text: Document):
         ))
     if len(new_chunks):
             print(f"👉 Adding new documents: {len(new_chunks)}")
+            greek_db.add_documents(new_chunks)
             greek_db.persist()
 
 
@@ -114,3 +119,6 @@ def clear_database():
         shutil.rmtree(BOOK_DB)
     if os.path.exists(GREEK_DB):
         shutil.rmtree(GREEK_DB)
+
+if __name__ == "__main__":
+    main()

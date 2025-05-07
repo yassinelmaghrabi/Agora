@@ -26,11 +26,12 @@ Thumbs.db
 
 # Local data
 *.sqlite
+*.sqlite3
 *.db
 *.pdf
+*.gguf
 # Environment files
 .env
-
 # PyTest cache
 .pytest_cache/
 

@@ -1,15 +1,14 @@
 
 
-from clean_text import collect_expanded
+from src.GTE.clean_text import collect_expanded
 from typing import List, Dict, Optional
 import time
 import datetime
-from bs4 import BeautifulSoup
 import re
 import roman
 import requests
 import logging
-
+from lxml import etree
 # Setup logging for errors
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -77,49 +76,36 @@ def extract(input_text: str) -> tuple[List[Dict[str, str]], List[str]]:
     return processed_matches, raw_matches
 
 
-def extract_greek_lines_from_url(url: str, line_range: str) -> str:
-    """
-    Fetches the Greek text from a URL and extracts a specified range of lines.
 
-    Args:
-        url (str): The URL of the papyrus document.
-        line_range (str): The range of lines to extract, formatted as "start-end" (e.g., "1-5").
-    
-    Returns:
-        str: The Greek text extracted from the specified range of lines, with numbers removed for clarity.
-    """
-    response = requests.get(url)
-    response.raise_for_status()
-    html = response.text
+def extract_greek_lines_from_file(filepath):
 
-    soup = BeautifulSoup(html, 'html.parser')
-    edition_div = soup.find('div', id='edition')
-    
-    if not edition_div:
-        raise ValueError("Greek edition not found in HTML.")
+    with open(filepath, 'rb') as f:
+        xml_bytes = f.read()
 
-    lines = []
-    current_line = ""
+    # Parse with namespace support
+    tree = etree.fromstring(xml_bytes)
+    ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
 
-    for elem in edition_div.descendants:
-        if elem.name == 'a':  # Skip links
-            continue
-        if elem.name == 'br':  # Line break - append current line
-            lines.append(current_line.strip())
-            current_line = ""
-        elif elem.name is None:  # Regular text node
-            current_line += elem.strip()
+    ab_elements = tree.xpath("//tei:div[@type='edition']//tei:ab", namespaces=ns)
 
-    if current_line.strip():
-        lines.append(current_line.strip())  # Append remaining text
-
-    start, end = map(int, line_range.split('-'))
-    collected_lines = lines[start-1:end]
-    joined_text = "\n".join(collected_lines)
-    
-    cleaned_text = re.sub(r'\d+', '', joined_text)  # Remove numbers
-    return cleaned_text
-
+    greek_lines = []
+    for ab in ab_elements:
+        for lb in ab.xpath(".//tei:lb[@n]", namespaces=ns):
+            try:
+                line_num = int(lb.attrib["n"])
+            except ValueError:
+                continue  # skip non-integer line numbers
+            if line_num:
+                parts = [lb.tail or '']
+                for sib in lb.itersiblings():
+                    if sib.tag.endswith("lb"):
+                        break
+                    parts.append(sib.text or '')
+                    parts.append(sib.tail or '')
+                greek_lines.append("".join(parts).strip())
+    output = "\n".join(greek_lines)
+    print(output)
+    return output
 
 def smart_split(text: str) -> List[str]:
     """
@@ -183,11 +169,25 @@ def process_extracted_text(input_text: str) -> Optional[Dict[str, str]]:
             output['collection'] = parts[0][:-1].lower()
         else:
             output['collection'] = parts[0].lower()
-        
-        output['number'] = roman.fromRoman(parts[1])  # Convert Roman numeral to Arabic number
-        output['identifier'], output['lines'] = parts[2].split('.')
-        return output
+        try:
+            output['number'] = roman.fromRoman(parts[1])  # Convert Roman numeral to Arabic number
+            output['identifier'] = parts[2].split('.')[0]
+            return output
+        except:
+            return None
     return None
+
+def get_Dir(input_dict: Dict[str, str]) -> str:
+    """
+    Generates the URL for a papyri reference based on the provided dictionary.
+
+    Args:
+        input_dict (Dict[str, str]): A dictionary containing the 'collection', 'number', and 'identifier' of the papyrus.
+    
+    Returns:
+        str: The generated URL.
+    """
+    return f"./src/data/greek/idp.data/DDB_EpiDoc_XML/{input_dict.get('collection')}/{input_dict.get('collection')}.{input_dict.get('number')}/{input_dict.get('collection')}.{input_dict.get('number')}.{input_dict.get('identifier')}.xml"
 
 
 def get_URL(input_dict: Dict[str, str]) -> str:
@@ -217,14 +217,14 @@ def scrape_list(dict_list: List[Dict[str, str]], delay: float) -> List[Optional[
     output = []
     for dict in dict_list:
         try:
-            output.append(extract_greek_lines_from_url(get_URL(dict), dict['lines']))
+            output.append(extract_greek_lines_from_file(get_Dir(dict)))
         except:
             output.append(None)
         time.sleep(delay)  # Delay between requests
     return output
 
 
-def greek_text_from_text(input_text: str, delay: float = 0.5) -> List[Dict[str, str]]:
+def greek_text_from_text(input_text: str, delay: float = 0) -> List[Dict[str, str]]:
     """
     Extracts Greek text from the input text by collecting references and scraping the corresponding texts.
 
@@ -239,9 +239,12 @@ def greek_text_from_text(input_text: str, delay: float = 0.5) -> List[Dict[str, 
     """
     input_text = " ".join(collect_expanded(input_text))  # Expand all references
     extracted_Dicts, extracted_text = extract(str(input_text))  # Extract references and text
-
+    unique_dicts = [dict(t) for t in {tuple(d.items()) for d in extracted_Dicts}]
     output_list = []
-    for a, b in zip(extracted_text, scrape_list(extracted_Dicts, delay)):
+
+    for a, b in zip(extracted_text, scrape_list(unique_dicts, delay)):
+        if b == '' or b == None:
+            continue
         output_list.append({"clause": a, "text": b})  # Pair citation and text
 
     return output_list
